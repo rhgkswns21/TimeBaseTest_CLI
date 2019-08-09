@@ -32,16 +32,12 @@ deviceLABELlist = []
 deviceOKcount = [0, 0, 0, 0, 0]
 deviceFailcount = [0, 0, 0, 0, 0]
 
-mqttFlag = False
-connectFlag = False
 nowConnectState = False
 sampleStartFlag = False
 endEventFlag = False
 
-testInterval = [] #threading.Timer(int(time_info[1])*60, connMQTTbroker)
-testTimerOut = [] #threading.Timer(3*60, wait_time_out)
-
-autologCount = 0
+testInterval = []
+testTimerOut = []
 
 
 ########################################## MQTT ##########################################
@@ -57,7 +53,6 @@ def on_connect(client, userdata, level, buf):
 
     if buf == 0:
         log_appand("Broker Connection Complete")
-        log_appand(None)
         nowConnectState = True
         for i in Device:
             if i != "":
@@ -84,14 +79,15 @@ def on_message(client, userdata, msg):
             check_device[i] = True
             send_text = "OK Device :" + "\t" + device_type[i] + " " + Device[i]
             log_appand(send_text)
-            # make_data_file(str(msg.payload), str(topic))
+            make_data_file(str(msg.payload), str(topic))
     print("check deivce ", check_device)
 
     if False in check_device:
         print("list False")
     else:
-        mqtt_client.loop_stop()
-        mqtt_client.disconnect()
+        for i in mqtt_client:
+            i.loop_stop()
+            i.disconnect()
 
 
 ########################################## Func ##########################################
@@ -102,6 +98,7 @@ def connMQTTbroker():
     print(nowConnectState)
     if(nowConnectState == False):
         print("Connect Broker")
+        log_appand(None)
         log_appand("Connecting...")
         client = mqtt.Client()  # MQTT Client 오브젝트 생성
 
@@ -120,7 +117,7 @@ def connMQTTbroker():
         timer = threading.Timer(int(time_info[1]) * 60, connMQTTbroker)
         timer.start()
         testInterval.append(timer)
-        timer = threading.Timer(3 * 60, wait_time_out)
+        timer = threading.Timer(5 * 60, wait_time_out)
         timer.start()
         testTimerOut.append(timer)
 
@@ -128,15 +125,29 @@ def connMQTTbroker():
 def start_sampling():
     global sampleStartFlag
     print("change sampleStartFlag True")
+
+    for i in range(len(check_device)):
+        if Device[i] == "":
+            check_device[i] = True
+        else:
+            check_device[i] = False
+    print(check_device)
     sampleStartFlag = True
 
 ## 수신 대기 타임아웃
 def wait_time_out():
     print("wait timer out")
+    for i in range(len(Device)):
+        if check_device[i] == False:
+            log_txt = str("FAIL Device : " + "\t" + device_type[i] + " " + Device[i])
+            log_appand(log_txt)
+            fail_log_append(log_txt)
     for i in mqtt_client:
         i.loop_stop()
         i.disconnect()
     mqtt_client.clear()
+    fail_log_append("---------------------------------")
+    comparison()
 
 def log_appand(text):
     now_time = date.datetime.now()
@@ -147,9 +158,50 @@ def log_appand(text):
         f.writelines("\n")
     f.close()
 
+def fail_log_append(text):
+    now_time = date.datetime.now()
+    f = open(now_time.strftime('%m-%d') + "Fail_LOG.txt", 'a')
+    if(text != None):
+        f.writelines(str(now_time.strftime('%Y-%m-%d %H:%M:%S')) + "\t" + text + '\n')
+    else:
+        f.writelines("\n")
+    f.close()
+
 def end_timer():
     global endEventFlag
     endEventFlag = True
+
+#데이터 파일 저장
+def make_data_file(mqtt_data, topic):
+    split_topic = topic.split('/')
+    print(split_topic[3])
+    check_topic.append(split_topic[3])
+    f = open("checkDATA/now" + split_topic[3] + ".txt", 'w')
+    test_data2 = mqtt_data.split('"accelerometer":"')
+    print(test_data2)
+    test_data3 = test_data2[1].split('"}')
+    print(test_data3)
+    split_test = test_data3[0].split('n')
+    print(split_test)
+    delete_text = []
+    for i in range(0, len(split_test) - 1):
+        delete_text.append(split_test[i].rstrip('\\').rstrip('r').rstrip('\\'))
+        f.write(delete_text[i])
+        f.write("\n")
+    f.close()
+
+#같은 데이터 내용인가를 확인
+def comparison():
+    for i in check_topic:
+        print("Comparison " + i)
+        if os.path.isfile("checkDATA/pre" + i + ".txt"):
+            if filecmp.cmp("checkDATA/pre" + i + ".txt", "checkDATA/now" + i + ".txt"):
+                print(i + "의 내용이 동일")
+                log_appand(i + " Same Data")
+            else:
+                print(i + "의 내용이 다름")
+        shutil.copyfile("checkDATA/now" + i + ".txt", "checkDATA/pre" + i + ".txt")
+    check_topic.clear()
 
 log_appand(None)
 log_appand("Test Start")
@@ -167,6 +219,9 @@ if time_info[0] != "0":
 
 connMQTTbroker()
 
+#make Dir
+if not (os.path.isdir("checkDATA")):
+    os.makedirs(os.path.join("checkDATA"))
 ####################################################################################################################
 
 while(1):
@@ -181,10 +236,14 @@ while(1):
     if(endEventFlag):
         print("Test Complete")
         log_appand("Test Complete")
-        testInterval.cancel()
-        testTimerOut.cancel()
+        for i in testTimerOut:
+            i.cancel()
+        for i in testInterval:
+            i.cancel()
         for i in mqtt_client:
             i.loop_stop()
             i.disconnect()
         mqtt_client.clear()
+        testInterval.clear()
+        testTimerOut.clear()
         break
